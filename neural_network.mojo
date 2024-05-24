@@ -1,6 +1,7 @@
 from python import Python
 from tensor import Tensor, TensorSpec, TensorShape
 from collections.vector import InlinedFixedVector
+from matrix import Matrix, MatrixStruct, matmul
 
 # Type aliases
 alias NeuralNetworkShape = VariadicList[Int]
@@ -10,28 +11,33 @@ alias NeuralNetworkSpec = Tuple[DType, NeuralNetworkShape]
 struct NeuralNetwork[SPEC: NeuralNetworkSpec](Hashable):
     alias DTYPE = SPEC.get[0, DType]()
     alias SHAPE = SPEC.get[1, NeuralNetworkShape]()
-    var data: UnsafePointer[PythonObject]
+    var data: List[PythonObject]
     var hash: Int
     var data_spec: List[TensorSpec]
     
     fn __init__(inout self) raises:
         var torch = Python.import_module("torch")
-        self.data = UnsafePointer[PythonObject].alloc((len(Self.SHAPE) - 1) * 2)
-        self.hash = int(self.data)
+        self.data = List[PythonObject]()
+        
         self.data_spec = List[TensorSpec]()
         for i in range(len(Self.SHAPE) - 1):
-            self.data[2*i] = torch.rand(Self.SHAPE[i+1], Self.SHAPE[i])
-            self.data[2*i+1] = torch.rand(Self.SHAPE[i+1], 1)
+            var tensor_1 = torch.rand(Self.SHAPE[i+1], Self.SHAPE[i])
+            var tensor_2 = torch.rand(Self.SHAPE[i+1], 1)
+            self.data.append(tensor_1^)
+            self.data.append(tensor_2^)
             self.data_spec.append(TensorSpec(Self.DTYPE, Self.SHAPE[i+1], Self.SHAPE[i]))
             self.data_spec.append(TensorSpec(Self.DTYPE, Self.SHAPE[i+1], 1))
 
-    fn __init__(inout self, owned data: UnsafePointer[PythonObject]):
+        self.hash = int(self.data[0][0])
+
+    fn __init__(inout self, owned data: List[PythonObject]):
         self.data = data
-        self.hash = int(self.data)
         self.data_spec = List[TensorSpec]()
         for i in range(len(Self.SHAPE) - 1):
             self.data_spec.append(TensorSpec(Self.DTYPE, Self.SHAPE[i+1], Self.SHAPE[i]))
             self.data_spec.append(TensorSpec(Self.DTYPE, Self.SHAPE[i+1], 1))
+
+        self.hash = int(self.data[-1])
         
 
     fn __moveinit__(inout self, owned existing: Self):
@@ -58,9 +64,6 @@ struct NeuralNetwork[SPEC: NeuralNetworkSpec](Hashable):
             result += str(i)
 
         return result
-
-    fn __del__(owned self):
-        self.data.free()
 
     fn __getitem__(self, index: Int) raises -> PythonObject:
         if index >= len(self.data_spec) or index < 0:
