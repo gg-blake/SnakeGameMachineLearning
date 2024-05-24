@@ -9,7 +9,7 @@ from python import Python
 from math import exp
 
 alias M = 3  # rows of A and C
-alias N = 4  # cols of B and C
+alias N = 7  # cols of B and C
 alias K = 5  # cols of A and rows of B
 alias type = DType.float32
 
@@ -24,18 +24,18 @@ trait MatrixStruct:
     # Initialize zeroeing all values
     fn __init__(inout self):...
 
-    # Initialize taking a pointer, don't set any elements
-    fn __init__(inout self, owned data: DTypePointer[type]):...
-
     fn __str__(self) -> String:...
 
     fn __moveinit__(inout self, owned existing: Self):...
 
     fn __add__(self, other: Self) -> Self:...
 
+    fn __mul__(self, other: Self) -> Self:...
+
     fn to_tensor(self) -> Tensor[type]:...
 
     fn to_array(self) raises -> PythonObject:...
+
     # Initialize with random values
     @staticmethod
     fn rand() -> Self:...
@@ -48,60 +48,92 @@ trait MatrixStruct:
 
     fn store[nelts: Int](self, y: Int, x: Int, val: SIMD[type, nelts]):...
 
-
-struct Matrix[rows: Int, cols: Int](MatrixStruct):
+struct Matrix(CollectionElement):
     var data: DTypePointer[type]
+    var rows: Int
+    var cols: Int
 
     # Initialize zeroeing all values
-    fn __init__(inout self):
+    fn __init__(inout self, rows: Int, cols: Int):
         self.data = DTypePointer[type].alloc(rows * cols)
+        self.rows = rows
+        self.cols = cols
         memset_zero(self.data, rows * cols)
 
     # Initialize taking a pointer, don't set any elements
-    fn __init__(inout self, owned data: DTypePointer[type]):
+    fn __init__(inout self, rows: Int, cols: Int, owned data: DTypePointer[type]):
         self.data = data
-
-    fn __str__(self) -> String:
-        return str(self.to_tensor())
+        self.rows = rows
+        self.cols = cols
 
     fn __moveinit__(inout self, owned existing: Self):
         self.data = existing.data
+        self.rows = existing.rows
+        self.cols = existing.cols
+
+    fn __copyinit__(inout self, borrowed existing: Self):
+        self.data = DTypePointer[type].alloc(existing.rows * existing.cols)
+        memset_zero(self.data, existing.rows * existing.cols)
+        self.rows = existing.rows
+        self.cols = existing.cols
+        for i in range(existing.rows):
+            for j in range(existing.cols):
+                self[i, j] = existing[i, j]
+
+    fn __str__(self) -> String:
+        var content: String = "["
+        for i in range(self.rows):
+            var substring: String = "["
+            for j in range(self.cols):
+                substring += str(self[i, j])
+                if j != self.rows - 1 and self.cols != 1:
+                    substring += ", "
+            substring += "]"
+            if i != self.rows - 1:
+                substring += ",\n"
+            content += substring
+        content += "], shape=" + str(self.rows) + "x" + str(self.cols) + "]"
+        return content^
 
     fn __add__(self, other: Self) -> Self:
-        var result = Self()
-        for r in range(rows):
-            for c in range(cols):
+        var result = Self(self.rows, self.cols)
+        for r in range(self.rows):
+            for c in range(self.cols):
                 result[r, c] = self[r, c] + other[r, c]
 
         return result^
 
-    fn to_tensor(self) -> Tensor[type]:
-        var t = Tensor[type](TensorShape(rows, cols))
-        for r in range(rows):
-            for c in range(cols):
-                var i = Index(r, c)
-                t[i] = self[r, c]
-        
-        return t
+    fn __add__(self, val: Scalar[type]) -> Self:
+        var result = Self(self.rows, self.cols)
+        var vec = self.load[nelts](0, 0)
+        result.store[nelts](0, 0, vec + val)
+        return result^
 
-    fn to_array(self) raises -> PythonObject:
-        var np = Python.import_module("numpy")
-        var arr = np.zeros((rows, cols))
-        for r in range(rows):
-            for c in range(cols):
-                var val = self[r, c]
-                arr[r][c] = val
+    fn __sub__(self, val: Scalar[type]) -> Self:
+        var result = Self(self.rows, self.cols)
+        var vec = self.load[nelts](0, 0)
+        result.store[nelts](0, 0, vec - val)
+        return result^
 
-        return arr^
+    fn __mul__(self, other: Self) -> Self:
+        var result = Self(self.rows, self.cols)
+        var vec_a = self.load[nelts](0, 0)
+        var vec_b = other.load[nelts](0, 0)
+        result.store[nelts](0, 0, vec_a * vec_b)
+        return result^
 
-    
+    fn __mul__(self, val: Scalar[type]) -> Self:
+        var result = Self(self.rows, self.cols)
+        var vec = self.load[nelts](0, 0)
+        result.store[nelts](0, 0, vec * val)
+        return result^
 
     # Initialize with random values
     @staticmethod
-    fn rand() -> Self:
+    fn rand(rows: Int, cols: Int) -> Self:
         var data = DTypePointer[type].alloc(rows * cols)
         rand(data, rows * cols)
-        return Self(data)
+        return Self(rows, cols, data)
 
     fn __getitem__(borrowed self, y: Int, x: Int) -> Scalar[type]:
         return self.load[1](y, x)
@@ -115,8 +147,9 @@ struct Matrix[rows: Int, cols: Int](MatrixStruct):
     fn store[nelts: Int](self, y: Int, x: Int, val: SIMD[type, nelts]):
         return self.data.store[width=nelts](y * self.cols + x, val)
 
-fn matmul[M: Int, K: Int, N: Int](A: Matrix[M, K], B: Matrix[K, N]) -> Matrix[M, N]:
-    var C = Matrix[M, N]()
+fn matmul[N: Int](A: Matrix, B: Matrix) -> Matrix:
+    # Note: N must be equal to B's # of columns
+    var C = Matrix(A.rows, B.cols)
     for m in range(C.rows):
         for k in range(A.cols):
             @parameter
@@ -125,18 +158,19 @@ fn matmul[M: Int, K: Int, N: Int](A: Matrix[M, K], B: Matrix[K, N]) -> Matrix[M,
                     m, n, C.load[nelts](m, n) + A[m, k] * B.load[nelts](k, n)
                 )
 
-            vectorize[dot, nelts, size = C.cols]()
+            vectorize[dot, nelts, size = N]()
 
     return C^
+    
 
 fn benchmark_matmul():
-    var A = Matrix[M, K].rand()
-    var B = Matrix[K, N].rand()
+    var A = Matrix.rand(M, K)
+    var B = Matrix.rand(K, N)
 
     @always_inline
     @parameter
     fn test_fn():
-        _ = matmul[M, K, N](A, B)
+        _ = matmul[N](A, B)
 
     var secs = benchmark.run[test_fn]().mean()
 
@@ -147,13 +181,14 @@ fn benchmark_matmul():
 
 fn benchmark_matmul_py() raises:
     var np = Python.import_module("numpy")
-    var A = np.random.rand(M, K)
-    var B = np.random.rand(K, N)
+    
 
     @always_inline
     @parameter
     fn test_fn():
         try:
+            var A = np.random.rand(M, K)
+            var B = np.random.rand(K, N)
             _ = np.matmul(A, B)
         except:
             pass
@@ -162,15 +197,15 @@ fn benchmark_matmul_py() raises:
 
     print("Python: ", str(secs))
 
-fn expit_vec(A: Matrix) -> Matrix[A.rows, A.cols]:
-    var B = Matrix[A.rows, A.cols]()
+fn expit_vec(A: Matrix) -> Matrix:
+    var B = Matrix(A.rows, A.cols)
     var x = A.load[nelts](0, 0)
     var result = 1 / (1 + exp[type, nelts](-x))
     B.store[nelts](0, 0, result)
     return B^
 
-fn expit(A: Matrix) -> Matrix[A.rows, A.cols]:
-    var B = Matrix[A.rows, A.cols]()
+fn expit(A: Matrix) -> Matrix:
+    var B = Matrix(A.rows, A.cols)
     for r in range(A.rows):
         for c in range(A.cols):
             B[r, c] = 1 / (1 + exp[type, 1](-A[r, c]))
@@ -181,24 +216,29 @@ fn expit_py[M: Int, N: Int](A: PythonObject) -> PythonObject:
         var np = Python.import_module("numpy")
         var B = np.zeros(M, N)
         B = 1 / (1 + np.exp(-A))
-        return B
+        return B^
     except:
         return Python.none()
 
+fn mutate(A: Matrix, strength: Scalar[type]) -> Matrix:
+    return A + Matrix.rand(A.rows, A.cols) * strength
 
-
-
+fn feed_forward(A: Matrix, B: Matrix, C: Matrix) -> Matrix:
+    return expit(matmul[1](A, B) + C)
 
 fn main() raises:
-    var A = Matrix[M, N].rand()
-    var B = Matrix[M, N]()
-    var C = Matrix[M, N]()
-
-    @parameter
-    fn list[x: VariadicList[Int], i: Int]():
-        if i+1 == len(x) - 1:
-            return VariadicList[MatrixStruct](Matrix[x[i], x[i+1]])
-
-        return VariadicList[MatrixStruct](Matrix[x[i], x[i+1]], list[x, i+1]())
+    var A = Matrix.rand(4, 5)
+    var B = Matrix.rand(5, 1)
+    var C = Matrix.rand(5, 1)
     
-    alias matricies = list[VariadicList[Int](2, 3, 4, 5), 0]()
+    @parameter
+    @always_inline
+    fn test_fn():
+        var D = feed_forward(A, B, C)
+
+    var secs = benchmark.run[test_fn]().mean()
+    print("Time:", secs)
+    
+
+
+    
