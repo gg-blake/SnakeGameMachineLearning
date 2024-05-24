@@ -1,0 +1,2 @@
+FROM blayyyyyk/mojosdk:latest
+
