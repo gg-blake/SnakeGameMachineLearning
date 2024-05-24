@@ -81,7 +81,7 @@ struct Snake(Hashable):
         if self.is_dead():
             return
 
-        var torch = Python.import_module("torch")
+        var numpy = Python.import_module("numpy")
         var pygame = Python.import_module("pygame")
 
         var fruit_left = int((fruit_position < self.position)[0])
@@ -122,17 +122,17 @@ struct Snake(Hashable):
         var no_body_left_fruit_behind = fruit_behind and not body_left_side
         var no_body_right_fruit_behind = fruit_behind and not body_right_side
 
-        var input = torch.tensor([
+        var input = numpy.array([
             body_ahead, body_left_side, body_right_side,
             no_body_fruit_ahead, no_body_fruit_left_side, no_body_fruit_right_side, no_body_left_fruit_behind, no_body_right_fruit_behind,
             wall_ahead, wall_left_side, wall_right_side
-        ]).to(torch.float32).unsqueeze(1)
+        ])
 
         var output = self.neural_network.feed(input)
-        output = torch.flatten(output)
+        output = numpy.flatten(output)
         var sorted: PythonObject
         var indices: PythonObject
-        output = torch.argmax(output)
+        output = numpy.argmax(output)
 
         var direction_num = 0
         if Vector2D(0, -1) == self.direction:
